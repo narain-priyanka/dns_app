@@ -1,0 +1,63 @@
+import org.apache.spark.sql.{SparkSession, DataFrame, SaveMode}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.Row
+import org.apache.spark.sql.types.{StructType, StructField, StringType, DoubleType, LongType}
+
+object FHVHV {
+
+  def cleanData(df: DataFrame): DataFrame = {
+
+        val cdf = df.withColumnRenamed("PUlocationID","PUlocationID_old").withColumnRenamed("DOlocationID","DOlocationID_old")
+
+        val nonNullDf = cdf.filter(col("hvfhs_license_num").isNotNull && col("dispatching_base_num").isNotNull && col("PUlocationID").isNotNull && col("DOlocationID").isNotNull && col("trip_miles").isNotNull)
+
+        val castDf= nonNullDf.withColumn("PUlocationID",col("PUlocationID_old").cast(DoubleType)).withColumn("DOlocationID",col("DOlocationID_old").cast(DoubleType))
+
+        val dfFinal = castDf.drop("PUlocationID_old", "DOlocationID_old")
+
+        dfFinal.select("hvfhs_license_num","dispatching_base_num","PUlocationID","DOlocationID","trip_miles").coalesce(1)
+  }
+
+  def profileData(df: DataFrame, year :Int): Unit = {
+    // Print summary statistics or any other profiling steps    
+    // top busiest zones
+    val zoneFrequency = df.groupBy("dispatching_base_num").count()
+    val sortedZoneFrequency = zoneFrequency.orderBy(desc("count"))
+    sortedZoneFrequency.write.mode(SaveMode.Overwrite).parquet(s"/user/pn2182_nyu_edu/project/data/profile/tlc/fhvhv/merged_fhvhv_${year}_profileddata.parquet")
+  }
+
+  def main(args: Array[String]): Unit = {
+    // Create a Spark session
+    val spark = SparkSession.builder.appName("FHVHV").getOrCreate()
+
+    try {
+      // List of cabs and years
+      val years = Seq(2020, 2021, 2022, 2023)
+
+      val schema = StructType(Array(StructField("hvfhs_license_num", StringType, true), StructField("dispatching_base_num", StringType, true),
+        StructField("PUlocationID", DoubleType, true), StructField("DOlocationID", DoubleType, true), StructField("trip_miles", DoubleType, true)))
+
+      // Loop through years
+      for (year <- years) {
+        val source = s"/user/pn2182_nyu_edu/project/data/source/tlc/fhvhv/$year/*/*.parquet"
+
+        // Read Parquet file
+        val df = spark.read.parquet(source)
+
+        // Clean the data
+        val cleanedDf = cleanData(df)
+
+        // Profile the data
+        profileData(cleanedDf, year)
+
+        cleanedDf.write.mode(SaveMode.Overwrite).parquet(s"/user/pn2182_nyu_edu/project/data/clean/tlc/fhvhv/merged_fhvhv_${year}_clean_data.parquet")
+        // Merge all the files
+      }
+
+      // Write the merged result to a Parquet file
+    } finally {
+      // Stop Spark session
+      spark.stop()
+    }
+  }
+}
